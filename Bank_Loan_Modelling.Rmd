@@ -1,0 +1,553 @@
+---
+title: "Bank_Loan_Modelling"
+author: " Krpete Thimmegowda, Shrinidhi; Kari, Aashritha;Rameshkumar, Sasnika; Liu,Christine"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+# Background & Goal  
+
+This project is about a bank that wants to expand its borrower base among its depositors so the bank could benefit from the interest on loans. The purpose is to build a model to identify potential loan customers among depositors, improving success rates, and reducing campaign costs.
+
+```{r , include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(leaps)
+library(stringr)
+library(pROC)
+library(stats)
+library(caret)
+library(e1071)
+library(GGally)
+library(tidyverse)
+library(randomForest)
+library(pROC)
+
+```
+
+# Data Loading
+```{r , message=FALSE}
+data=read.csv("C:/Users/Admin/Downloads/BankLoan_data.csv")
+mydata<-data
+
+```
+
+# Dataset Overview
+
+## Data type (before datatype convertion)
+```{r }
+str(data)
+```
+## Previewing the Top Rows of the Datase
+```{r }
+head(data)
+```
+## Summary of the Datase (before datatype convertion)
+```{r }
+summary(data)
+```
+
+## Creating age bin
+```{r }
+# Define the breaks for the bins
+breaks <- c(0, 20, 40, 60, 80, 100)
+
+# Create a binned variable for 'Age'
+data$Age_Bin <- cut(data$Age, breaks = breaks, labels = c("0-20", "21-40", "41-60", "61-80", "81-100"))
+```
+
+## Define a function to map Education values to corresponding labels
+```{r }
+map_education <- function(x) {
+  ifelse(x == 1, "Undergrad",
+         ifelse(x == 2, "Graduate",
+                ifelse(x == 3, "Advanced/Professional", "Unknown")))
+}
+```
+
+## Add new columns based on values associated with each variable
+```{r }
+data <- data %>%
+  mutate(Education_Level = map_education(Education),
+         Personal_Loan_Status = ifelse(PersonalLoan == 1, "Accepted", "Not Accepted"),
+         Securities_Account_Status = ifelse(SecuritiesAccount == 1, "Yes", "No"),
+         CD_Account_Status = ifelse(CDAccount == 1, "Yes", "No"),
+         Online_Banking = ifelse(Online == 1, "Yes", "No"),
+         Credit_Card_User = ifelse(CreditCard == 1, "Yes", "No"))
+```
+
+## Convert datatype
+```{r }
+data$ID<-as.factor(data$ID) 
+data$Age<-as.numeric(data$Age)
+data$Experience<-as.numeric(data$Experience)
+data$Income<-as.numeric(data$Income)
+data$ZIPCode<-as.factor(data$ZIPCode)
+data$Family<-as.numeric(data$Family)
+data$CCAvg<-as.numeric(data$CCAvg)
+data$Education<-as.factor(data$Education)
+data$Mortgage<-as.numeric(data$Mortgage)
+data$PersonalLoan<-as.factor(data$PersonalLoan)
+data$SecuritiesAccount<-as.factor(data$SecuritiesAccount)
+data$CDAccount<-as.factor(data$CDAccount)
+data$Online<-as.factor(data$Online)
+data$CreditCard<-as.factor(data$CreditCard)
+```
+
+```{r }
+data$Age_Bin<-as.factor(data$Age_Bin)
+data$Education_Level<-as.factor(data$Education_Level)
+data$Personal_Loan_Status<-as.factor(data$Personal_Loan_Status)
+data$Securities_Account_Status<-as.factor(data$Securities_Account_Status)
+data$CD_Account_Status<-as.factor(data$CD_Account_Status)
+data$Online_Banking<-as.factor(data$Online_Banking)
+data$Credit_Card_User<-as.factor(data$Credit_Card_User)
+```
+
+## Data type (after datatype convertion)
+```{r }
+str(data)
+```
+
+## Convert datatype (after datatype convertion)
+```{r }
+summary(data)
+```
+
+# Data Cleaning
+
+### Apply absolute function to 'Experience' column since we have negative values in Experience column
+```{r }
+data <- mutate(data, Experience = abs(Experience))
+```
+
+### Check for missing values
+```{r }
+missing_values <- colSums(is.na(data))
+print(missing_values)
+```
+
+### Check for Correlation
+```{r }
+correlation_matrix <- cor(subset(data, select = c(Age, Experience, Income, CCAvg, Mortgage)))
+correlation_matrix 
+
+corrplot(correlation_matrix, method = "circle")
+```
+Age and Experience are highly correlated
+
+### Check for multicolinearity between Age and Experience
+```{r }
+  ggplot(data, aes(x = Age, y = Experience)) +
+  geom_point() +
+  labs(x = "Age", y = "Experience", title = "Scatter Plot of Age vs Experience")
+```
+We can't use both age and experience in the model since they are highly correlated.
+We should also drop id columns like ID, ZIPCode 
+
+# Data Exploration
+### Histogram for numeric variables
+```{r }
+numeric_vars <- c("Age", "Experience", "Income", "CCAvg", "Mortgage")
+# Loop through the list and plot histogram for each variable
+for (var in numeric_vars) {
+  p <- ggplot(data, aes_string(x = var)) +
+    geom_histogram(fill = "skyblue", color = "black", bins = 30) +
+    theme_minimal() +
+    labs(title = paste("Histogram of", var), x = var, y = "Frequency")
+  print(p)
+}
+```
+
+### Density plot for numeric variables
+```{r }
+# Loop through the list and plot density plot for each variable
+for (var in numeric_vars) {
+  p <- ggplot(data, aes_string(x = var)) +
+    geom_density(fill = "skyblue", color = "black") +
+    theme_minimal() +
+    labs(title = paste("Density Plot of", var), x = var, y = "Density")
+  print(p)
+}
+```
+
+### Boxplot for numeric variables
+```{r }
+# Boxplot for numeric variables
+for (var in numeric_vars) {
+  p <- ggplot(data, aes_string(x = var)) + 
+    geom_boxplot(fill = "skyblue", color = "black") +
+    theme_minimal() +
+    labs(title = paste("Boxplot of", var), x = var, y = "Value")
+  print(p)
+}
+```
+
+### Bar plot for categorical variables
+```{r }
+# List of categorical variables
+categorical_vars <- c("Age_Bin", "Family", "Education_Level", "Securities_Account_Status", "CD_Account_Status", "Online_Banking", "Credit_Card_User")
+
+# Loop through the list and plot bar plot for each variable
+for (var in categorical_vars) {
+  p <- ggplot(data, aes_string(x = var, fill = "Personal_Loan_Status")) +
+    geom_bar(position = "dodge") +
+    theme_minimal() +
+    labs(title = paste("Bar Plot of", var, "grouped by Personal Loan"), x = var, y = "Count")
+  print(p)
+}
+```
+
+
+### Box plot for numerical variables
+```{r }
+# Loop through the list and plot box plot for each variable
+for (var in numeric_vars) {
+  p <- ggplot(data, aes_string(x = "Personal_Loan_Status", y = var, fill = "Personal_Loan_Status")) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Box Plot of", var, "by Personal Loan"), x = "Personal Loan", y = var)
+  print(p)
+}
+```
+
+### Violin plot for numerical variables
+```{r }
+# Loop through the list and plot violin plot for each variable
+for (var in numeric_vars) {
+  p <- ggplot(data, aes_string(x = "Personal_Loan_Status", y = var, fill = "Personal_Loan_Status")) +
+    geom_violin() +
+    theme_minimal() +
+    labs(title = paste("Violin Plot of", var, "by Personal Loan"), x = "Personal Loan", y = var)
+  print(p)
+}
+```
+
+### Scatter plot for numerical variables
+```{r }
+# Scatter Plot Matrix
+# Select the numerical variables
+selected_vars <- c("Age","Experience", "Income", "CCAvg", "Mortgage", "PersonalLoan")
+
+# Create the scatter plot matrix
+ggpairs(data[selected_vars], mapping = aes(color = as.factor(PersonalLoan)))
+
+```
+
+### Stacked plot for Education and Family
+```{r }
+
+# Create a new variable that combines Education and Family
+data$Edu_Fam <- paste("Education:", data$Education, "Family:", data$Family)
+
+# Create the stacked bar plot
+ggplot(data, aes(x = Edu_Fam, fill = as.factor(PersonalLoan))) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Stacked Bar Plot of Education and Family by Personal Loan", x = "Education and Family", y = "Proportion")
+
+```
+
+### Removing the newly added categorical columns and ID columns
+```{r }
+data<-subset(data,select=-c(Age_Bin,Securities_Account_Status,CD_Account_Status, Online_Banking,Credit_Card_User,Personal_Loan_Status,Edu_Fam))
+```
+
+#Data Preparation for Modeling - Stepwise reduction
+###class imbalance check
+```{r }
+class_distribution <- table(data$PersonalLoan)
+cat("class distribution in")
+print(class_distribution)
+class_distribution_percentage <- prop.table(class_distribution) * 100
+cat("class distribution in percentage")
+print(class_distribution_percentage)
+
+```
+
+###there is a class imbalance, we need to adress this
+```{r }
+#Identify indices of class 0 and class 1
+class_0_indices <- which(data$PersonalLoan == 0)
+class_1_indices <- which(data$PersonalLoan == 1)
+
+# Randomly select indices from class 0 to achieve desired class ratio
+num_samples_class_1 <- length(class_1_indices)
+num_samples_class_0_desired <- floor(num_samples_class_1 * (6/4)) # For 60% class 0 and 40% class 1
+
+# Randomly sample indices from class 0
+class_0_indices_undersampled <- sample(class_0_indices, num_samples_class_0_desired)
+
+# Combine indices of both classes
+undersampled_indices <- c(class_0_indices_undersampled, class_1_indices)
+
+# Create undersampled dataset
+undersampled_data <- data[undersampled_indices, ]
+###rechcek the class distribution for 70-30
+class_distribution <- table(undersampled_data$PersonalLoan)
+print(class_distribution)
+class_distribution_percentage <- prop.table(class_distribution) * 100
+print(class_distribution_percentage)
+str(undersampled_data)
+```
+
+###Stewise reduction model
+```{r }
+model_data<-subset(undersampled_data,select=-c(ID,ZIPCode,Education,Experience))
+str(model_data)
+#########Modelling#######
+########full model
+full_model <- glm(PersonalLoan ~ ., data = model_data, family = binomial)
+str(model_data)
+summary(full_model)
+#####
+# Perform automatic stepwise variable reduction
+step_model <- step(full_model, direction = "backward")
+summary(step_model)
+```
+
+###Perfrom likelyhood ratio test
+```{r }
+lrt <- anova(full_model, step_model, test = "Chisq")
+print(lrt)
+
+```
+P value is 0.82, there is no statistical significance difference between model fit for full and simplified  model.
+so we choose simplified model
+
+###Interpretatiion
+```{r }
+summary(step_model)
+```
+1.when all other variables are held constant, for each increase in income of 1000$ the odds of churn increases 1.06 times
+2.when all other variables are held constant, the odds of churn is 1.43 times higher for person who doesn't use online banking facilities than the person who uses online banking facilities
+3.when all other variables are held constant, the odds of churn is 26 times higher for person with advanced degree than undergraduate
+4.when all other variables are held constant,the odds of churn is 3.19 times higher for person who doesn't use credit card than the person using credit card
+
+
+###Model Validation
+```{r }
+set.seed(1)
+train.index=sample(c(TRUE,FALSE),prob=c(0.7,0.3),size=nrow(model_data),replace=TRUE)
+train=model_data[train.index,] 
+valid=model_data[!train.index,]
+
+final_model<-glm(PersonalLoan ~ Income + Family + CCAvg + SecuritiesAccount + CDAccount + Online + CreditCard + Education_Level, family = binomial, data = train)
+
+predicted_probs <- predict(final_model, type = "response", newdata = valid)
+
+```
+
+### Compute ROC curve
+```{r }
+roc_curve <- roc(valid$PersonalLoan, predicted_probs)
+
+# Plot ROC curve
+plot(roc_curve, main = "ROC Curve", col = "blue")
+
+# Compute AUC
+auc_value <- auc(roc_curve)
+print(paste("AUC:", auc_value))
+
+
+```
+
+### Find the operating point based on the Youden's Index
+```{r }
+optimal_threshold <- coords(roc_curve, "best", best.method = "youden")
+
+# Print the threshold and corresponding sensitivity and specificity
+print(optimal_threshold)
+optimum_val<-round(max(optimal_threshold$threshold),2)
+cat("Optimum threshold is",optimum_val)
+```
+
+### Use the otimum threshold for classification
+```{r }
+########threshold set 0.4 based on RoC curve
+valid$prob=predict(final_model,valid,type="response")
+valid$pred=ifelse(valid$prob>optimum_val,1,0)
+
+```
+
+### Validate accuracy using confusion matrix
+```{r }
+confusion=table(actual=valid$PersonalLoan,predicted=valid$pred)
+confusion
+TP=confusion[2,2]
+FN=confusion[2,1]
+FP=confusion[1,2]
+TN=confusion[1,1]
+accuracy=(TP+TN)/nrow(valid)
+precision=TP/(TP+FP)
+sensitivity=TP/(TP+FN)
+error=1-accuracy
+c(accuracy,precision,sensitivity,error)
+
+```
+Our focus is to get overall good accuracy and high sensitivity(the models ability capture the true positive in the model.As we are predicting churn it is important we capture as many people that were about churn so we could take precautionary measures)
+
+
+# Data Preparation for Modeling- SVM 
+### Drop the Experience column because Age and Experience are highly correlated
+### Drop the ID and Zipcode columns
+```{r }
+svmdata <- subset(data, select = -Experience)
+svmdata <- subset(data, select = -c(ID, ZIPCode, CCAvg))
+
+```
+
+# Modeling
+## Split data into training and test sets
+```{r }
+set.seed(123)
+train_index <- createDataPartition(svmdata$PersonalLoan, p = .8, list = FALSE)
+train_data <- svmdata[train_index, ]
+test_data <- svmdata[-train_index, ]
+```
+
+## Recursive Feature Elimination (RFE) to select the optimal subset of features for predicting
+```{r }
+# Set up the control using cross-validation
+ctrl <- rfeControl(functions=rfFuncs, method="cv", number=10)
+
+# Perform recursive feature elimination
+results <- rfe(train_data[, -which(names(train_data) %in% "PersonalLoan")], train_data$PersonalLoan, sizes=c(1:10), rfeControl=ctrl)
+
+# Print the results
+print(results)
+print(results$optVariables)
+```
+
+## Trains a linear SVM model using the selected variables obtained from RFE
+```{r }
+# Train the model using the selected variables
+svm_model <- train(PersonalLoan ~ Income + Education + Family + CDAccount + CreditCard, data = train_data, method = "svmLinear", trControl = trainControl(method = "cv", number = 10), prob.model = TRUE)
+
+# Print the model
+print(svm_model)
+
+# Get the weights
+weights <- t(svm_model$finalModel@coef[[1]]) %*% svm_model$finalModel@xmatrix[[1]]
+
+# Get the intercept
+intercept <- svm_model$finalModel@b
+
+# Print the weights and intercept
+print(weights)
+print(intercept)
+```
+
+
+
+## Evaluates the SVM model's performance by calculating various metrics such as accuracy, error rates, and different types of errors (MAE, MSE, RMSE)
+```{r }
+# Predict on the test data
+svm_predictions <- predict(svm_model, newdata = test_data[, c(results$optVariables, "PersonalLoan")])
+
+# Evaluate the model
+confusionMatrix(svm_predictions, test_data$PersonalLoan)
+
+# Find the row in svm_model$results that matches svm_model$bestTune
+best_row <- which(svm_model$results$C == svm_model$bestTune$C)
+
+# Print the best row
+print(best_row)
+
+# Accuracy of the final model
+final_accuracy <- svm_model$results[best_row, "Accuracy"]
+print(paste("Cross-validation Accuracy: ", final_accuracy))
+
+# Cross-validation error
+cv_error <- 1 - final_accuracy
+print(paste("Cross-validation Error: ", cv_error))
+
+# Predict on the test data
+svm_predictions <- predict(svm_model, newdata = test_data[, c(results$optVariables, "PersonalLoan")])
+
+# Convert factors to numeric
+actuals <- as.numeric(as.character(test_data$PersonalLoan))
+predictions <- as.numeric(as.character(svm_predictions))
+
+# Calculate MAE
+mae <- mean(abs(predictions - actuals))
+print(paste("Mean Absolute Error: ", mae))
+
+# Calculate MSE
+mse <- mean((predictions - actuals)^2)
+print(paste("Mean Squared Error: ", mse))
+
+# Calculate RMSE
+rmse <- sqrt(mse)
+print(paste("Root Mean Squared Error: ", rmse))
+```
+
+#Conclusion 
+
+A higher income, higher education levels, larger family size, having a CD Account, and having a Credit Card are associated with a higher likelihood of belonging to the "purchase personal loan" category
+
+
+### Data Preparation for model - Random forest
+```{r , include=FALSE}
+# Subset the data and select relevant columns
+data_subset <- data[, c("Income", "Mortgage", "CCAvg", "PersonalLoan")]
+
+# Split the data into training and testing sets
+set.seed(123)  # For reproducibility
+train_index <- sample(nrow(data_subset), 0.8 * nrow(data_subset))  # 80% train, 20% test
+train_data <- data_subset[train_index, ]
+test_data <- data_subset[-train_index, ]
+
+# Standardize the numeric variables (Income, Mortgage, CCAvg)
+scaler <- preProcess(train_data[, c("Income", "Mortgage", "CCAvg")], method = c("center", "scale"))
+train_data_scaled <- predict(scaler, train_data)
+test_data_scaled <- predict(scaler, test_data)
+
+# Build the Logistic Regression model
+log_model <- glm(PersonalLoan ~ Income + Mortgage + CCAvg, data = train_data_scaled, family = "binomial")
+
+# Make predictions on the test set using Logistic Regression
+test_data$predicted_log <- ifelse(predict(log_model, newdata = test_data_scaled, type = "response") > 0.5, 1, 0)
+
+# Evaluate the Logistic Regression model
+confusion_matrix_log <- table(test_data$PersonalLoan, test_data$predicted_log)
+accuracy_log <- sum(diag(confusion_matrix_log)) / sum(confusion_matrix_log)
+auc_log <- pROC::auc(roc(test_data$PersonalLoan, test_data$predicted_log))
+
+cat("Logistic Regression Model Metrics:\n")
+cat("Confusion Matrix:\n", confusion_matrix_log, "\n")
+cat("Accuracy:", accuracy_log, "\n")
+cat("AUC Score:", auc_log, "\n")
+
+# Build the Random Forest model
+rf_model <- randomForest(PersonalLoan ~ Income + Mortgage + CCAvg, data = train_data_scaled)
+
+# Make predictions on the test set using Random Forest
+test_data$predicted_rf <- predict(rf_model, newdata = test_data_scaled, type = "response")
+
+# Convert predicted_rf to numeric for Random Forest predictions
+test_data$predicted_rf_numeric <- as.numeric(as.character(test_data$predicted_rf))
+
+# Evaluate the Random Forest model with numeric predictions
+confusion_matrix_rf_numeric <- table(test_data$PersonalLoan, ifelse(test_data$predicted_rf_numeric > 0.5, 1, 0))
+accuracy_rf_numeric <- sum(diag(confusion_matrix_rf_numeric)) / sum(confusion_matrix_rf_numeric)
+auc_rf_numeric <- pROC::auc(roc(test_data$PersonalLoan, test_data$predicted_rf_numeric))
+
+cat("Random Forest Model Metrics (Numeric Predictions):\n")
+cat("Confusion Matrix:\n", confusion_matrix_rf_numeric, "\n")
+cat("Accuracy:", accuracy_rf_numeric, "\n")
+cat("AUC Score:", auc_rf_numeric, "\n")
+
+```
+
+
+###Conclusion
+
+
+
+#Reference
+### Data Source 
+### https://www.kaggle.com/datasets/itsmesunil/bank-loan-modelling/data
+
